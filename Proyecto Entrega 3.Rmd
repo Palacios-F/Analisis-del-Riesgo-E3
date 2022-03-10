@@ -1,101 +1,788 @@
 ---
 title: "Proyecto Analisis del Riesgo Entrega 3"
-output: html_notebook
+author:
+-Berlín Isabel Preciado Escalera
+-Flavio Cesár Palacios
+-Daniel Orozco
+date: "Primavera 2022"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: yes
+subtitle: Instituto Tecnológico y de Estudios Superiores de Occidente (ITESO), A. C.
 ---
 
-This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
-
-Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
-
-
-
-```{r, echo = FALSE, message = FALSE}
+```{r Importar librerías, include = FALSE}
 library(quantmod)
-library(PerformanceAnalytics)
-library(tidyverse)
-library(moments)
 library(lubridate)
+library(PerformanceAnalytics)
+library(kableExtra)
+library(moments)
+library(tidyverse)
 ```
 
-```{r}
-options("getSymbols.warning4.0"=FALSE)
-options("getSymbols.yahoo.warning"=FALSE)
-# Descarga de los datos historicos de los últimos cinco años
+<div style="text-align: justify; font-size: 16px">
+En esta entrega se presentan los resultados y el análisis de algunos pronósticos del precio de BOLSAA.MX basándose en los modelos estocásticos de Ito y su adaptación logarítmica utilizando el lema de Ito. Además se le realiza pruebas de normalidad y de rendimiento cero a las variables utilizadas con el fin de validar los supuestos de los modelos.
+</div>
 
+# Cálculo de rendimiento y volatilidad
 
-datos=new.env()
-getSymbols("BOLSAA.MX", from = '2008-06-13',
-           to = "2022-02-11",warnings = FALSE,
-           auto.assign = TRUE)
-```
-Para el caso de estudio se deberá estimar el rendimiento y la volatilidad (diaria y anualizada) por año (desde el primer año de cotización registrado).
-
-
-```{r}
-
-print(BOLSAA.MX)
-```
-```{r}
-pricebolsa=BOLSAA.MX$BOLSAA.MX.Close
-returnn=Return.calculate(pricebolsa)
-print(returnn)
+```{r Obtener y graficar precio, echo = FALSE, message = FALSE, warning = FALSE, results = FALSE}
+claves <- c("BOLSAA.MX")
+getSymbols(claves,  to = "2022-03-09", warnings = "FALSE")
+lista <- lapply(claves, function(x) Cl(get(x)))
+precio <- (do.call(merge, lista))
+names(precio) <- claves
+chartSeries(to.quarterly(precio), theme = "white", up.col = "green", dn.col = "red", name = paste("Precio de", claves))
 ```
 
-```{r}
-returnn%>%
-  ggplot(aes(Index,BOLSAA.MX.Close))+
-  theme_get()+
-  geom_line(fill="red")+
-labs(title="Rendimientos Diarios del Activo BOLSAA.MX")
-```
-```{r}
-lista <- lapply("BOLSAA.MX", function(x) Cl(get(x)))
-precio <- (do.call(merge,lista))
-Rend <- na.omit(diff(log(na.omit(precio))))
-hist(Rend, n = 100, main = paste("Histograma de" ,"BOLSAA.MX"),col = "#05529B")
-chart.Histogram(Rend)
+**Figura 1**. Precio diario de cierre ajustado a trimestres de PINFRA. Elaboración propia.
+</div>
+
+<div style="text-align: justify; font-size: 16px">
+<br>
+
+
+<br>
+El rendimiento simple $R_{t + 1}$ se calcula con la siquiente fórmula:
+$$R_{t + 1} = \frac{S_{t + 1}-S_{t}}{S_{t}}$$
+Donde
+
+* $t$ es la unidad de tiempo (en este caso, está medida en días).
+* $S_{t+1}$ es el precio en el día actual (día t).
+* $S_{t}$ es el precio en el día anterior.
+
+<br>
+Aplicando esta fórmula se obtienen $N - 1$ observaciones de rendimiento, donde $N$ es el número de observaciones en el precio. Esto sucede debido a que el rendimiento del primer día no se puede calcular porque no hay un día anterior con el cual compararlo. La gráfica del rendimiento diario es la siguiente (figura 2):
+</div>
+
+<div style="text-align: center; font-size: 13px">
+```{r Obtener y graficar rendimiento, echo = FALSE, warning = FALSE}
+rendimiento <- na.omit(dailyReturn(precio)) # rendimiento simple
+plot(rendimiento, main = "Rendimiento diario de BOLSAA.MX", col = "black")
 ```
 
-```{r}
-hist(precio,n=100)
-```
-```{r}
-mean(Rend)
-```
-```{r}
-names(precio) <- c("precio")
-names(Rend) <- c("rendimiento")
-Anio <- year(Rend)
-Est_Prin <- Rend %>%
-  as_tibble() %>% 
-  mutate(year = Anio) %>% 
-  group_by(year) %>% 
-  summarise(Rendiario = mean(rendimiento),
-            RenAnual = mean(rendimiento)*252,
-            Voldiaria = sd(rendimiento),
-            VolAnual = sd(rendimiento)*sqrt(252))
-```
-```{r}
-Ren_diario_todo <- mean(Rend)
-Vol_diaria_todo <- sd(Rend)
-Ren_diario_todo
-Vol_diaria_todo
+**Figura 2**. Rendimiento diario de cierre de BOLSAA.MX. Elaboración propia.
+</div>
+
+<div style="text-align: justify; font-size: 16px">
+<br>
+Se observa que los rendimientos diarios de BOLSAA.MX oscilan alrededor de cero.
+
+<br>
+Para calcular la volatilidad, se requiere obtener la media $\mu$ de los rendimientos diarios. El rendimiento diario promedio se calcula así:
+$$R_{diario} = \mu = \frac{1}{N - 1}\sum_{i = 1}^{N}R_{i}$$
+Donde
+
+* $N$ es el número de observaciones en el precio.
+* $R_{i}$ es el rendimiento en el día $i$.
+
+<br>
+La volatilidad $\sigma$, la cual es la misma que la desviación estándar de los rendimientos, se obtiene calculando la raíz cuadrada de la varianza $\sigma^{2}$. La varianza se calcula de la siguiente forma:
+$$\sigma^{2} = \frac{1}{N - 1}\sum_{i = 1}^{N}(R_{i} - \mu)^{2}$$
+
+<br>
+Entonces, la volatilidad diaria es la siguiente:
+$$Vol_{diaria} = \sigma = \sqrt{\sigma^{2}}$$
+
+<br>
+El rendimiento anualizado se calcula simplemente multiplicando el rendimiento diario promedio por los días hábiles en un año debido a que se trata de una relación lineal.
+$$R_{anual} = R_{diario} \cdot 252$$
+
+<br>
+En cambio, la volatilidad anualizada se calcula multiplicando la volatilidad diaria por la raíz cuadrada de los días hábiles en un año debido a que la volatilidad no se trata de un atributo cuantitativo lineal, sino cuadrático inverso.
+$$Vol_{anual} = Vol_{diaria} \cdot \sqrt{252}$$
+<br>
+Al realizar los cálculos con R, se obtiene la tabla 1:
+```{r Poner parámetros en una matriz, include = FALSE}
+datos <- matrix(0, 16, 4)
+for(y in 1:16) {
+  datos[y, 1] <- mean(rendimiento[year(rendimiento) == 2005 + y])
+  datos[y, 2] <- sd(rendimiento[year(rendimiento) == 2005 + y])
+  datos[y, 3] <- datos[y, 1] * 252
+  datos[y, 4] <- datos[y, 2] * sqrt(252)
+}
 ```
 
-#Normalidad del rendimiento
-```{r}
-Rend %>%
-  as_tibble() %>% 
-  ggplot(aes(x=rendimiento))+
-  geom_histogram(aes(y = ..density..),bins = 100, fill = "#0A7E53", alpha = 0.5)+
-  geom_density(aes(x = rendimiento, col = "Densidad empirica"), color =  "#0A7E53")+
-  stat_function(fun = dnorm, args = list(mean =Ren_diario_todo, sd = Vol_diaria_todo), aes(col = "Densidad normal"))
-```
-```{r}
-jarque.test(as.numeric(Rend))
-```
-```{r}
-kurtosis(Rend)
-skewness(Rend)
+```{r Llenar una tabla con la matriz, include = FALSE}
+`%` <- function(x){paste(round(x * 100, 2), "%")}
+anual <- tibble::tibble(Periodo = c(2006:2021), RendD = `%`(datos[,1]), VolD = `%`(datos[,2]), RendA = `%`(datos[,3]), VolA = `%`(datos[,4]))
 ```
 
+```{r Presentar tabla, echo = FALSE}
+kable(anual, align = c("c", "c", "c", "c", "c"), digits = 2, col.names = c("Año", "Rendimiento diario", "Volatilidad diaria", "Rendimiento anualizado", "Volatilidad anualizada")) %>%
+  kable_paper(full_width = F, html_font = "Arial") %>%
+  row_spec(0, bold = T, color = "black") %>%
+  column_spec(1, bold = T, color = "black")
+```
+</div>
+
+<div style="text-align: center; font-size: 13px">
+**Tabla 1**. Rendimiento y volatilidad diaria promedio y anualizada de PINFRA.MX. Elaboración propia.
+<br>
+</div>
+
+# Prueba de normalidad
+<div style="text-align: justify; font-size: 16px">
+A continuación se efectúa la prueba de normalidad sobre el rendimiento, el precio y el logaritmo del precio del activo. Existen muchas pruebas formales de normalidad; sin embargo, la que se utilizará en este trabajo es la prueba de Jarque Bera, que compara dos parámetros de la distribución: la curtosis y el sesgo.
+
+<br>
+La curtosis $K$ se refiere a qué tan concentrados están los datos alrededor de la media. Cuando la curtosis es igual a 3, se trata de una distribución normal mesocúrtica (el cual es el estándar de comparáción para la prueba Jarque Bera). Si es menor a 3 se trata de una distribución leptocúrtica y la campana del histograma es alargada. Y si es mayor a 3 es una distribución platicúrtica, con poca concentración de observaciones alrededor de la media. La curtosis se calcula de la siguiente manera:
+$$K = {\frac{{\frac{1}{n}}\sum_{i = 1}^{n}(x_{i} - {\bar{x}})^{4}}{\left({\frac{1}{n}}\sum_{i = 1}^{n}(x_{i} - {\bar {x}})^{2}\right)^{2}}}$$
+Donde
+
+* $n$ es el número de observaciones.
+* $\bar{x}$ es la media de la muestra.
+* $x_{i}$ es cada elemento de la muestra.
+
+<br>
+Por otro lado; el sesgo, medido con el coeficiente de asimetría $S$, mide qué tan cargada están los datos hacia uno u otro lado de la distribución. Si el coeficiente es mayor a cero, existe un sesgo a la derecha; lo que quiere decir que presenta mayor número de observaciones a la izquierda (Vela, F., 2010, pp.4-7). En cambio, si es menor a cero, hay un sesgo a la izquierda (la distribución tiene mayor concentración de datos a la derecha). El coeficiente de asimetría se calcula así:
+$$S = {\frac{{\frac {1}{n}}\sum_{i = 1}^{n}(x_{i} - {\bar{x}})^{3}}{\left({\frac{1}{n}}\sum _{i = 1}^{n}(x_{i} - {\bar {x}})^{2}\right)^{3 / 2}}}$$
+<br>
+
+Así, el estadístico $JB$ de la prueba de Jarque Bera se calcula como sigue (Wikipedia, 2019, párr. 1-3):
+$${\displaystyle {\mathit {JB}}={\frac {n}{6}}\left(S^{2}+{\frac {1}{4}}(K-3)^{2}\right)}$$
+
+<br>
+La regla de decisión para probar la normalidad de la distribución, es: si el valor estadístico JB es mayor a 9.2130, se rechaza la hipótesis nula.
+<br>
+</div>
+
+## Rendimiento diario
+<div style="text-align: justify; font-size: 16px">
+El histograma de los rendimientos diarios de PINFRA.MX se muestra a continuación (figura 3):
+<br>
+</div>
+
+<div style="text-align: center; font-size: 13px">
+```{r Histograma de los rendimientos, echo = FALSE}
+hist(rendimiento, n = 30, main = "Histograma del rendimiento diario de BOLSAA.MX", col = "pink", xlab = "Rendimiento diario", ylab = "Frecuencia absoluta")
+```
+
+**Figura 3**. Histograma de los rendimientos diarios de BOLSAA.MX. Elaboración propia.
+</div>
+
+<div style="text-align: justify; font-size: 16px">
+<br>
+La figura 3 muestra que hay un pequeño sesgo a la derecha o asimetría positiva, pues la campana está levemente cargada hacia el lado izquierdo de la gráfica. Además, se observa una distribución leptocúrtica debido a la altura del histograma.
+
+
+
+## Precio diario de cierre
+<div style="text-align: justify; font-size: 16px">
+El histograma de los precios de cierre diarios de PINFRA.MX se muestra a continuación (figura 4):
+<br>
+</div>
+
+<div style="text-align: center; font-size: 13px">
+```{r Histograma de los precios, echo = FALSE}
+hist(precio, n = 30, main = "Histograma de los precios de cierre diarios de BOLSAA.MX", col = "orange", xlab = "Precio de cierre", ylab = "Frecuencia absoluta")
+```
+
+**Figura 4**. Histograma de los precios de cierre diarios de BOLSAA.MX. Elaboración propia.
+</div>
+
+<div style="text-align: justify; font-size: 16px">
+<br>
+Es notable que el precio no sigue una distribución normal sino un tipo de distribución multimodal, pues se aprecian dos campanas juntas en el histograma. Por lo mismo, no tiene sentido intentar analizar la curtosis o el sesgo de la misma.
+
+
+
+
+## Logaritmo natural del precio
+<div style="text-align: justify; font-size: 16px">
+El histograma del logaritmo natural de los precios de cierre diarios de BOLSAA.MX se muestra a continuación (figura 5):
+<br>
+</div>
+
+<div style="text-align: center; font-size: 13px">
+```{r Histograma del logaritmo de los precios, echo = FALSE}
+hist(log(precio), n = 30, main = "Histograma del logaritmo de los precios de cierre diarios de PINFRA.MX", col = "light blue", xlab = "Logaritmo natural del precio de cierre", ylab = "Frecuencia absoluta")
+```
+
+**Figura 5**. Histograma de los precios de cierre diarios de BOLSAA.MX. Elaboración propia.
+
+
+
+
+# Prueba de rendimiento cero
+<div style="text-align: justify; font-size: 16px">
+Se puede comprobar el principio de que los rendimientos de los activos tienden a ser cero con una prueba de rendimiento cero. Es posible realizar esta prueba a partir de la prueba de t de Student para los rendimientos diarios, pero es importante mencionar que para realizar esta prueba se asume que la variable *testeada* se distribuye normalmente. La prueba t es utilizada para comparar dos medias; en este caso, la media estándar de cero contra la media de la variable, por lo que la prueba indica qué tan significativamente diferentes son estos dos valores (SEFO, 2019, párr. 1). La regla de decisión para probar que la media del rendimiento es igual a cero, es: si el valor estadístico t es mayor a 2.3295, se rechaza la hipótesis nula.
+
+<br>
+Las hipótesis que se prueban son las siquientes:
+
+* $H_{0}$: La media de los rendimientos diarios de BOLSAA.MX es igual a cero.
+* $H_{a}$: La media de los rendimientos diarios de BOLSAA.MX es diferente de cero.
+
+<br>
+Calculado en R, el estadístico de la prueba resulta ser el siguiente (tabla 5):
+```{r Prueba de rendimiento cero, echo = FALSE, warning = FALSE}
+t <- t.test(rendimiento)
+TSD <- tibble(Año = "2006-2021", Est_T_del_Rend = t[["statistic"]])
+kable(TSD, align = c("c", "c"), digits = 2, col.names = c("Periodo", "Estadístico t")) %>%
+  kable_paper(full_width = F, html_font = "Arial") %>%
+  row_spec(0, bold = T, color = "black") %>%
+  column_spec(1, bold = T, color = "black")
+```
+</div>
+
+<div style="text-align: center; font-size: 13px">
+**Tabla 5**. Estadístico t de la prueba de rendimiento cero para BOLSAA.MX. Elaboración propia.
+</div>
+
+<div style="text-align: justify; font-size: 16px">
+<br>
+El estadístico t resulta ser levemente más alto que el criterio de decisión de 1.3214, por lo que se rechaza la hipótesis nula. Esto quiere decir que no se puede afirmar que la media del rendimiento diario de BOLSAA.MX sea igual a cero.
+<br>
+</div>
+
+# Simulación de comportamiento del activo
+<div style="text-align: justify; font-size: 16px">
+A continuación se realizarán una serie de simulaciones Montecarlo y cálculos teóricos usando el procesos de Ito para estimar el precio futuro de la acción de BOLSAA.MX en diferentes momentos:
+
+* 10 días
+* 20 días
+* 40 días
+* 3 meses
+* 6 meses
+* 9 meses
+* 12 meses
+
+<br>
+Para las primeras tres fechas se utilizará el proceso estocástico de Ito, mientras que para las últimas cuatro se utilizará una adaptación logarítmica del mismo. Esto es así debido a que empíricamente, el proceso de Ito simple funciona bien para intervalos de tiempo cortos, pero para fechas futuras lejanas funciona mejor la adaptación logarítmica.
+<br>
+</div>
+
+## Usando el proceso de Ito simple
+<div style="text-align: justify; font-size: 16px">
+El proceso de Ito es una variante del proceso de Wiener en el cual se cuenta con un componente determinista y otro estocástico (dado por el movimiento browniano). Es parecido al proceso de Wiener generalizado (movimiento geométrico browniano); pero los parámetros a y b (que son *drift rate* y la raíz de la tasa de varianza, respectivamente) dejan de ser constantes y pasan a depender del tiempo y de una variable. Su ecuación está dada de la siguiente forma:
+$$dS = \mu S_{0} dt + \sigma S_{0} dW$$
+Donde
+
+* $dt$ es el diferencial del tiempo (la diferencia entre la fecha futura y el presente, en la unidad de tiempo en la cual los parámetros están dados).
+* $\mu$ es la media del rendimiento actual del activo.
+* $\sigma$ es la desviación estándar estadística o voladilidad actual del activo.
+* $S_{0}$ es el precio actual del activo.
+
+<br>
+El componente estocástico de esta ecuación está dado por el diferencial (o cambio) del proceso puro de Wiener (movimiento browniano), que se modela de la siguiente manera:
+$$dW = \epsilon \sqrt{dt}$$
+Donde
+$$\epsilon \thicksim N(0, 1)$$
+
+<br>
+La variable *epsilon* $\epsilon$ tiene una distribución normal estándar (con media cero y varianza igual a uno).
+
+<br>
+De esta forma, el precio de PINFRA.MX en el plazo simulado estaría dado por el precio actual más el cambio calculado, expresado por la siguiente ecuación:
+$$S_{T} = S_{0} + dS$$
+
+```{r Construir ecuación días, include = FALSE}
+set.seed(123)
+funcion_ds <- function(dt){
+  mu <- datos[15, 1] # valores diarios
+  sigma <- datos[15, 2]
+  n <- 100000
+  S0 <- as.numeric(precio[length(precio),])
+  simulacion <- tibble(epsilon = rnorm(n), ds = mu * dt * S0 + S0 * sigma * sqrt(dt) * epsilon)
+  Media_DS <- mean(simulacion$ds)
+  Desvest_DS <- sd(simulacion$ds)
+  Z <- qnorm(0.025)
+  P_Inf <- round(S0 + Media_DS - abs(Z) * Desvest_DS, 2)
+  P_Sup <- round(S0 + Media_DS + abs(Z) * Desvest_DS, 2)
+  valor_Esperado <- round(S0 + mean(simulacion$ds), 2)
+  return (c(P_Inf, P_Sup, valor_Esperado))
+}
+resultados10d <- funcion_ds(10)
+resultados20d <- funcion_ds(20)
+resultados40d <- funcion_ds(40)
+```
+
+<br>
+Es importante mencionar que el precio $S_{0}$ para todas las simulaciones se extrajo del día 7 de marzo de 2022 (38.55 pesos), y los datos con los cuales se calculan los parámetros de la ecuación (rendimiento diario $\mu$ y volatilidad diaria $\sigma$) son los presentados en la tabla 1 para el año 2020. Así, la ecuación que se usará en las siguientes simulaciones será la siguiente:
+$$dS = \mu S_{0} dt + \sigma S_{0} \epsilon \sqrt{dt} = `r round(datos[15, 1], 4)` \cdot `r round(as.numeric(precio[length(precio),]), 2)` dt + `r round(datos[15, 2], 4)` \cdot `r round(as.numeric(precio[length(precio),]), 2)` \epsilon \sqrt{dt} = -0.0164dt + 3.7640 \epsilon \sqrt{dt}$$
+
+<br>
+Donde $dt$ depende del plazo y $\epsilon$ se simula escogiendo de manera aleatoria un valor de la distribución normal estándar.
+
+<br>
+<br>
+Y el intervalo de confianza estaría dado por la siguiente fórmula:
+$$S_{0} + E[dS] - |Z| \cdot \sqrt{V[dS]} \leq S_{T} \leq S_{0} + E[dS] + |Z| \cdot \sqrt{V[dS]}$$
+
+<br>
+El valor z para un 90% de confianza debe ser de aproximadamente -1.96 según la probabilidad acumulada de $\frac{alpha}{2} = \frac{1-0.9}{2} = 0.05$ en la tabla z de la distribución normal estándar con dos colas.
+$$S_{0} + E[dS] - |444| \cdot \sqrt{V[dS]} \leq S_{T} \leq S_{0} + E[dS] + | 444| \cdot \sqrt{V[dS]}$$
+<br>
+</div>
+
+### Pronóstico a 10 días
+#### Cálculo teórico
+<div style="text-align: justify; font-size: 16px">
+A continuación se realiza el cálculo teórico del pronóstico.
+
+<br>
+En este caso, sustituyendo $dt = 10$ se obtiene que:
+$$dS = -0.0164 dt + 3.7640 \epsilon \sqrt{dt} = 444 \cdot 10 + 3333 \epsilon \sqrt{10} = 4444 + 333 \epsilon$$
+
+<br>
+La media teórica de los cambios en el precio sería entonces $E[dS] = -0.1640$ y la desviación estándar $\sqrt{V[dS]} = 11.9026$. De esta forma, el valor esperado del precio en 10 días, teóricamente sería el siguiente:
+$$E[S_{T}] = E[S_{0} + dS] = E[S_{0}] + E[dS] = E[4444] + (444) = 444 - 444 = 444$$
+
+<br>
+Los límites del intervalo de confianza serían los siguientes:
+$$S_{0} + E[dS] - |444| \cdot \sqrt{V[dS]} \leq S_{T} \leq S_{0} + E[dS] + |444| \cdot \sqrt{V[dS]}$$
+$$1444 + (444) - |444| \cdot 1111 \leq S_{T} \leq 444 + (444) + |444| \cdot 444$$
+$$444 \cdot 444 \leq S_{T} \leq 444 - 444 + 444 \cdot 44$$
+$$140.16 \leq S_{T} \leq 186.82$$
+<br>
+Lo que quiere decir que el precio de BOLSAA.MX en 10 días estaría entre 444 y 144
+<br>
+<br>
+</div>
+
+#### Simulación con R
+<div style="text-align: justify; font-size: 16px">
+Los resultados de la simulación son los siguientes:
+El valor esperado del activo de BOLSAA.MX dentro de 10 días es de 
+$$`r resultados10d[3]`$$
+
+Con un 95%, el precio de BOLSAA.MX dentro de 10 días estaría en el intervalo (en pesos mexicanos)
+$$`r resultados10d[1]` \leq S_{T} \leq `r resultados10d[2]`$$
+</div>
+
+#### Comparación de resultados
+<div style="text-align: justify; font-size: 16px">
+A continuación se presenta un resumen de los resultados teóricos y simulados:
+```{r Tabla 10 días, echo = FALSE, warning = FALSE}
+results <- tibble(Resultado = c("Teórico", "Simulado", "Error relativo %"), Valor_E = c(163.49, resultados10d[3], `%`((as.numeric(resultados10d[3]) - 163.49) / 163.49)), Liminf = c(140.16, resultados10d[1], `%`((as.numeric(resultados10d[1]) - 140.16) / 140.16)), Limsup = c(186.82, resultados10d[2], `%`((as.numeric(resultados10d[2]) - 186.82) / 186.82)))
+kable(results, align = c("c", "c", "c", "c"), digits = 2, col.names = c("Resultado", "Valor Esperado", "Lím. Inf. 95%", "Lím. Sup. 95%")) %>%
+  kable_paper(full_width = F, html_font = "Arial") %>%
+  row_spec(0, bold = T, color = "black") %>%
+  column_spec(1, bold = T, color = "black")
+```
+</div>
+
+<div style="text-align: center; font-size: 13px">
+**Tabla 6**. Comparación de resultados teóricos y simulados (en pesos mexicanos) a 10 días. Elaboración propia.
+<br>
+<br>
+</div>
+
+### Pronóstico a 20 días
+#### Cálculo teórico
+<div style="text-align: justify; font-size: 16px">
+A continuación se realiza el cálculo teórico del pronóstico.
+
+<br>
+En este caso, sustituyendo $dt = 20$ se obtiene que:
+$$dS = -0.0164 dt + 3.7640 \epsilon \sqrt{dt} = -0.0164 \cdot 20 + 3.7640 \epsilon \sqrt{20} = -0.3280 + 16.9331 \epsilon$$
+
+<br>
+La media teórica de los cambios en el precio sería entonces $E[dS] = -0.3280$ y la desviación estándar $\sqrt{V[dS]} = 16.9331$. De esta forma, el valor esperado del precio en 20 días, teóricamente sería el siguiente:
+$$E[S_{T}] = E[S_{0} + dS] = E[S_{0}] + E[dS] = E[163.65] + (-0.3280) = 163.65 - 0.3280 = 163.32$$
+
+<br>
+Los límites del intervalo de confianza serían los siguientes:
+$$S_{0} + E[dS] - |-1.96| \cdot \sqrt{V[dS]} \leq S_{T} \leq S_{0} + E[dS] + |-1.96| \cdot \sqrt{V[dS]}$$
+$$163.65 + (-0.3280) - |-1.96| \cdot 16.9331 \leq S_{T} \leq 163.65 + (-0.3280) + |-1.96| \cdot 16.9331$$
+$$163.65 - 0.3280 - 1.96 \cdot 16.9331 \leq S_{T} \leq 163.65 - 0.3280 + 1.96 \cdot 16.9331$$
+$$130.13 \leq S_{T} \leq 196.51$$
+<br>
+Lo que quiere decir que el precio de PINFRA.MX en 20 días estaría entre 130.13 y 196.51 pesos.
+<br>
+<br>
+</div>
+
+#### Simulación con R
+<div style="text-align: justify; font-size: 16px">
+Los resultados de la simulación son los siguientes:
+El valor esperado del activo de PINFRA.MX dentro de 20 días es de 
+$$`r resultados20d[3]`$$
+
+Con un 95%, el precio de PINFRA.MX dentro de 20 días estará en el intervalo
+$$`r resultados20d[1]` \leq S_{T} \leq `r resultados20d[2]`$$
+</div>
+
+#### Comparación de resultados
+<div style="text-align: justify; font-size: 16px">
+A continuación se presenta un resumen de los resultados teóricos y simulados así como el error relativo:
+```{r Tabla 20 días, echo = FALSE, warning = FALSE}
+results <- tibble(Resultado = c("Teórico", "Simulado", "Error relativo %"), Valor_E = c(163.32, resultados20d[3], `%`((resultados20d[3] - 163.32) / 163.32)), Liminf = c(130.13, resultados20d[1], `%`((resultados20d[1] - 130.13) / 130.13)), Limsup = c(196.51, resultados20d[2], `%`((resultados20d[2] - 196.51) / 196.51)))
+kable(results, align = c("c", "c", "c", "c"), digits = 2, col.names = c("Resultado", "Valor Esperado", "Lím. Inf. 95%", "Lím. Sup. 95%")) %>%
+  kable_paper(full_width = F, html_font = "Arial") %>%
+  row_spec(0, bold = T, color = "black") %>%
+  column_spec(1, bold = T, color = "black")
+```
+</div>
+
+<div style="text-align: center; font-size: 13px">
+**Tabla 7**. Comparación de resultados teóricos y simulados (en pesos mexicanos) a 20 días. Elaboración propia.
+<br>
+<br>
+</div>
+
+### Pronóstico a 40 días
+#### Cálculo teórico
+<div style="text-align: justify; font-size: 16px">
+A continuación se realiza el cálculo teórico del pronóstico.
+
+<br>
+En este caso, sustituyendo $dt = 40$ se obtiene que:
+$$dS = -0.0164 dt + 3.7640 \epsilon \sqrt{dt} = -0.0164 \cdot 40 + 3.7640 \epsilon \sqrt{40} = -0.6560 + 23.8056 \epsilon$$
+
+<br>
+La media teórica de los cambios en el precio sería entonces $E[dS] = -0.6560$ y la desviación estándar $\sqrt{V[dS]} = 23.8056$. De esta forma, el valor esperado del precio en 40 días, teóricamente sería el siguiente:
+$$E[S_{T}] = E[S_{0} + dS] = E[S_{0}] + E[dS] = E[163.65] + (-0.6560) = 163.65 - 0.6560 = 162.99$$
+
+<br>
+Los límites del intervalo de confianza serían los siguientes:
+$$S_{0} + E[dS] - |-1.96| \cdot \sqrt{V[dS]} \leq S_{T} \leq S_{0} + E[dS] + |-1.96| \cdot \sqrt{V[dS]}$$
+$$163.65 + (-0.6560) - |-1.96| \cdot 23.8056 \leq S_{T} \leq 163.65 + (-0.6560) + |-1.96| \cdot 23.8056$$
+$$163.65 - 0.6560 - 1.96 \cdot 23.8056 \leq S_{T} \leq 163.65 - 0.6560 + 1.96 \cdot 23.8056$$
+$$116.34 \leq S_{T} \leq 209.65$$
+<br>
+Lo que quiere decir que el precio de PINFRA.MX en 40 días estaría entre 116.34 y 209.65 pesos.
+<br>
+<br>
+</div>
+
+#### Simulación con R
+<div style="text-align: justify; font-size: 16px">
+Los resultados de la simulación son los siguientes:
+El valor esperado del activo de PINFRA.MX dentro de 40 días es de 
+$$`r resultados40d[3]`$$.
+
+Con un 95%, el precio de PINFRA.MX dentro de 40 días estará en el intervalo
+$$`r resultados40d[1]` \leq S_{T} \leq `r resultados40d[2]`$$
+<br>
+</div>
+
+#### Comparación de resultados
+<div style="text-align: justify; font-size: 16px">
+A continuación se presenta un resumen de los resultados teóricos y simulados así como el error relativo:
+```{r Tabla 40 días, echo = FALSE, warning = FALSE}
+results <- tibble(Resultado = c("Teórico", "Simulado", "Error relativo %"), Valor_E = c(162.99, resultados40d[3], `%`((resultados40d[3] - 162.99) / 162.99)), Liminf = c(116.34, resultados40d[1], `%`((resultados40d[1] - 116.34) / 116.34)), Limsup = c(209.65, resultados40d[2], `%`((resultados40d[2] - 209.65) / 209.65)))
+kable(results, align = c("c", "c", "c", "c"), digits = 2, col.names = c("Resultado", "Valor Esperado", "Lím. Inf. 95%", "Lím. Sup. 95%")) %>%
+  kable_paper(full_width = F, html_font = "Arial") %>%
+  row_spec(0, bold = T, color = "black") %>%
+  column_spec(1, bold = T, color = "black")
+```
+</div>
+
+<div style="text-align: center; font-size: 13px">
+**Tabla 8**. Comparación de resultados teóricos y simulados (en pesos mexicanos) a 40 días. Elaboración propia.
+<br>
+<br>
+</div>
+
+## Usando el modelo logarítmico
+<div style="text-align: justify; font-size: 16px">
+Este modelo le aplica el lema de Ito al proceso utilizado en la sección anterior, donde la trayectoria de los cambios en el precio está modelada por el proceso de Ito simple:
+$$dS = \mu S_{0} dt + \sigma S_{0} dW$$
+Donde
+
+* $dt$ es el diferencial del tiempo (la diferencia entre la fecha futura y el presente, en la unidad de tiempo en la cual los parámetros están dados).
+* $\mu$ es la media del rendimiento actual del activo.
+* $\sigma$ es la desviación estándar estadística o voladilidad actual del activo.
+* $S_{0}$ es el precio actual del activo.
+
+<br>
+Y el precio del derivado financiero $G$ está dado por:
+$$G = \ln{S_0}$$
+
+<br>
+Aplicando el lema de Ito, la trayectoria de los cambios en el precio del derivado está modelada por:
+$$dG = \ln{S_{T}} - \ln{S_0} = \left(\mu - \frac{\sigma^{2}}{2}\right)dt + \sigma dW$$
+
+<br>
+Despejando la expresión anterior:
+$$\ln{S_{T}} = \ln{S_0} + \left(\mu - \frac{\sigma^{2}}{2}\right)dt + \sigma dW$$
+
+<br>
+Se asume un nuevo comportamiento modelado por un derivado financiero debido a que el cambio del precio en el derivado está directamente relacionado a los cambios del activo subyacente, por lo que la estimación de uno repercute en la del otro. Este modelo resulta mejor para hacer estimaciones a mayor plazo (de más de un mes).
+
+<br>
+El componente estocástico de esta ecuación está dado nuevamente por el diferencial (o cambio) del proceso puro de Wiener (movimiento browniano), que se modela de la siguiente manera:
+$$dW = \epsilon \sqrt{dt}$$
+Donde
+$$\epsilon \thicksim N(0, 1)$$
+
+<br>
+La variable *epsilon* $\epsilon$ tiene una distribución normal estándar (con media cero y varianza igual a uno).
+
+```{r Construir ecuación meses, include = FALSE}
+set.seed(123)
+funcion_lns <- function(dt){
+  mu <- datos[15, 3] # valores anuales
+  sigma <- datos[15, 4]
+  n <- 10000
+  S0 <- as.numeric(precio[length(precio),])
+  simulacion <- tibble(epsilon = rnorm(n), lnds = log(S0) + (mu - sigma**2 / 2) * dt + sigma * sqrt(dt) * epsilon)
+  Media_lnDS <- mean(simulacion$lnds)
+  Desvest_lnDS <- sd(simulacion$lnds)
+  Z <- qnorm(0.025)
+  P_Inf <- round(exp(Media_lnDS - abs(Z) * Desvest_lnDS), 2)
+  P_Sup <- round(exp(Media_lnDS + abs(Z) * Desvest_lnDS), 2)
+  valor_Esperado <- round(exp(Media_lnDS), 2)
+  return (c(P_Inf, P_Sup, valor_Esperado))
+}
+resultados3m <- funcion_lns(0.25)
+resultados6m <- funcion_lns(0.5)
+resultados9m <- funcion_lns(0.75)
+resultados12m <- funcion_lns(1)
+```
+
+<br>
+Es importante mencionar de nuevo (como se hizo en los pronósticos anteriores) que el precio $S_{0}$ para todas las simulaciones se extrajo del día 9 de junio de 2021 (163.65 pesos), y los datos con los cuales se calculan los parámetros de la ecuación (rendimiento anualizado $\mu$ y volatilidad anualizada $\sigma$) son los presentados en la tabla 1 para el año 2020. Así, la ecuación que se usará en las siguientes simulaciones será la siguiente:
+$$\ln{S_{T}} = \ln{S_0} + \left(\mu - \frac{\sigma^{2}}{2}\right)dt + \sigma \epsilon \sqrt{dt} = \ln{`r round(as.numeric(precio[length(precio),]), 2)`} + \left(`r round(datos[15, 3], 4)` - \frac{`r round(datos[15, 4], 4)`^{2}}{2}\right)dt + `r round(datos[15, 4], 4)` \epsilon \sqrt{dt}$$
+
+<br>
+Donde $dt$ depende del plazo y $\epsilon$ se simula escogiendo de manera aleatoria un valor de la distribución normal estándar.
+
+<br>
+Y el intervalo de confianza estaría dado por la siguiente fórmula:
+$$E[\ln{dS}] - |Z| \cdot \sqrt{V[\ln{dS}]} \leq \ln{S_{T}} \leq E[\ln{dS}] + |Z| \cdot \sqrt{V[\ln{dS}]}$$
+
+<br>
+El valor z para un 90% de confianza debe ser de aproximadamente -1.96 según la probabilidad acumulada de $\frac{alpha}{2} = \frac{1-0.9}{2} = 0.05$ en la tabla z de la distribución normal estándar con dos colas.
+$$E[\ln{dS}] - |-1.96| \cdot \sqrt{V[\ln{dS}]} \leq \ln{S_{T}} \leq E[\ln{dS}] + |-1.96| \cdot \sqrt{V[\ln{dS}]}$$
+
+Utilizando la función exponencial (base euler) para cancelar el logaritmo:
+$$e^{E[\ln{dS}] - |-1.96| \cdot \sqrt{V[\ln{dS}]}} \leq S_{T} \leq e^{E[\ln{dS}] + |-1.96| \cdot \sqrt{V[\ln{dS}]}}$$
+<br>
+</div>
+
+### Pronóstico a 3 meses
+#### Cálculo teórico
+<div style="text-align: justify; font-size: 16px">
+A continuación se realiza el cálculo teórico del pronóstico.
+
+<br>
+En este caso, sustituyendo $dt = \frac{3}{12} = 0.25$ se obtiene que:
+$$\ln{S_{T}} = \ln{163.65} + (-0.3- \frac{0.3652^{2}}{2})dt + 0.3652 \epsilon \sqrt{dt}$$
+$$\ln{S_{T}} = \ln{163.65} + (-0.3 - \frac{0.3652^{2}}{2}) \cdot 0.25 + 0.3652 \epsilon \sqrt{0.25} = 5.0061 + 0.1826 \epsilon$$
+
+<br>
+La media teórica de los cambios en el precio sería entonces $E[\ln{S_{T}}] = 5.0061$ y la desviación estándar $\sqrt{V[\ln{S_{T}}]} = 0.1826$. De esta forma, el valor esperado del precio en 3 meses, teóricamente sería el siguiente:
+$$E[S_{T}] =e^{E[\ln{S_{T}}]} = e^{5.0061} = 149.32$$
+
+<br>
+Los límites del intervalo de confianza serían los siguientes (el valor z debe ser de aproximadamente -1.96):
+$$e^{E[\ln{dS}] - |-1.96| \cdot \sqrt{V[\ln{dS}]}} \leq S_{T} \leq e^{E[\ln{dS}] + |-1.96| \cdot \sqrt{V[\ln{dS}]}}$$
+$$e^{5.0061 - |-1.96| \cdot 0.1826} \leq S_{T} \leq e^{5.0061 + |-1.96| \cdot 0.1826}$$
+$$104.40 \leq S_{T} \leq 213.58$$
+<br>
+Lo que quiere decir que el precio de PINFRA.MX en 3 meses estaría entre 104.40 y 213.58 pesos.
+<br>
+<br>
+</div>
+
+#### Simulación con R
+<div style="text-align: justify; font-size: 16px">
+Los resultados de la simulación son los siguientes:
+El valor esperado del activo de PINFRA.MX dentro de 3 meses es de 
+$$`r resultados3m[3]`$$.
+
+Con un 95%, el precio de PINFRA.MX dentro de 3 meses estará en el intervalo
+$$`r resultados3m[1]` \leq S_{T} \leq `r resultados3m[2]`$$
+<br>
+</div>
+
+#### Comparación de resultados
+<div style="text-align: justify; font-size: 16px">
+A continuación se presenta un resumen de los resultados teóricos y simulados así como el error relativo:
+```{r Tabla 3 meses, echo = FALSE, warning = FALSE}
+results <- tibble(Resultado = c("Teórico", "Simulado", "Error relativo %"), Valor_E = c(149.32, resultados3m[3], `%`((resultados3m[3] - 149.32) / 149.32)), Liminf = c(104.40, resultados3m[1], `%`((resultados3m[1] - 104.40) / 104.40)), Limsup = c(213.58, resultados3m[2], `%`((resultados3m[2] - 213.58) / 213.58)))
+kable(results, align = c("c", "c", "c", "c"), digits = 2, col.names = c("Resultado", "Valor Esperado", "Lím. Inf. 95%", "Lím. Sup. 95%")) %>%
+  kable_paper(full_width = F, html_font = "Arial") %>%
+  row_spec(0, bold = T, color = "black") %>%
+  column_spec(1, bold = T, color = "black")
+```
+</div>
+
+<div style="text-align: center; font-size: 13px">
+**Tabla 9**. Comparación de resultados teóricos y simulados (en pesos mexicanos) a 3 meses. Elaboración propia.
+<br>
+<br>
+</div>
+
+### Pronóstico a 6 meses
+#### Cálculo teórico
+<div style="text-align: justify; font-size: 16px">
+A continuación se realiza el cálculo teórico del pronóstico.
+
+<br>
+En este caso, sustituyendo $dt = \frac{6}{12} = 0.5$ se obtiene que:
+$$\ln{S_{T}} = \ln{163.65} + (-0.3 - \frac{0.3652^{2}}{2})dt + 0.3652 \epsilon \sqrt{dt}$$
+$$\ln{S_{T}} = \ln{163.65} + (-0.3 - \frac{0.3652^{2}}{2}) \cdot 0.5 + 0.3652 \epsilon \sqrt{0.5} = 4.9144 + 0.2582 \epsilon$$ 
+
+<br>
+La media teórica de los cambios en el precio sería entonces $E[\ln{S_{T}}] = 4.9144$ y la desviación estándar $\sqrt{V[\ln{S_{T}}]} = 0.2582$. De esta forma, el valor esperado del precio en 6 meses, teóricamente sería el siguiente:
+$$E[S_{T}] =e^{E[\ln{S_{T}}]} = e^{4.9144} = 136.24$$
+
+<br>
+Los límites del intervalo de confianza serían los siguientes (el valor z debe ser de aproximadamente -1.96):
+$$e^{E[\ln{dS}] - |-1.96| \cdot \sqrt{V[\ln{dS}]}} \leq S_{T} \leq e^{E[\ln{dS}] + |-1.96| \cdot \sqrt{V[\ln{dS}]}}$$
+$$e^{4.9144 - |-1.96| \cdot 0.2582} \leq S_{T} \leq e^{4.9144 + |-1.96| \cdot 0.2582}$$
+$$82.13 \leq S_{T} \leq 225.99$$
+<br>
+Lo que quiere decir que el precio de PINFRA.MX en 6 meses estaría entre 82.13 y 225.99 pesos.
+<br>
+<br>
+</div>
+
+#### Simulación con R
+<div style="text-align: justify; font-size: 16px">
+Los resultados de la simulación son los siguientes:
+El valor esperado del activo de PINFRA.MX dentro de 6 meses es de 
+$$`r resultados6m[3]`$$.
+
+Con un 95%, el precio de PINFRA.MX dentro de 6 meses estará en el intervalo
+$$`r resultados6m[1]` \leq S_{T} \leq `r resultados6m[2]`$$
+
+<br>
+</div>
+
+#### Comparación de resultados
+<div style="text-align: justify; font-size: 16px">
+A continuación se presenta un resumen de los resultados teóricos y simulados así como el error relativo:
+```{r Tabla 6 meses, echo = FALSE, warning = FALSE}
+results <- tibble(Resultado = c("Teórico", "Simulado", "Error relativo %"), Valor_E = c(136.24, resultados6m[3], `%`((resultados6m[3] - 136.24) / 236.24)), Liminf = c(82.13, resultados6m[1], `%`((resultados6m[1] - 82.13) / 82.13)), Limsup = c(225.99, resultados6m[2], `%`((resultados6m[2] - 225.99) / 225.99)))
+kable(results, align = c("c", "c", "c", "c"), digits = 2, col.names = c("Resultado", "Valor Esperado", "Lím. Inf. 95%", "Lím. Sup. 95%")) %>%
+  kable_paper(full_width = F, html_font = "Arial") %>%
+  row_spec(0, bold = T, color = "black") %>%
+  column_spec(1, bold = T, color = "black")
+```
+</div>
+
+<div style="text-align: center; font-size: 13px">
+**Tabla 10**. Comparación de resultados teóricos y simulados (en pesos mexicanos) a 6 meses. Elaboración propia.
+<br>
+<br>
+</div>
+
+### Pronóstico a 9 meses
+#### Cálculo teórico
+<div style="text-align: justify; font-size: 16px">
+A continuación se realiza el cálculo teórico del pronóstico.
+
+<br>
+En este caso, sustituyendo $dt = \frac{9}{12} = 0.75$ se obtiene que:
+$$\ln{S_{T}} = \ln{163.65} + (-0.3 - \frac{0.3652^{2}}{2})dt + 0.3652 \cdot \epsilon \sqrt{dt}$$
+$$\ln{S_{T}} = \ln{163.65} + (-0.3 - \frac{0.3652^{2}}{2}) \cdot 0.75 + 0.3652 \cdot \epsilon \sqrt{0.75} = 4.8227 + 0.3163 \epsilon$$
+
+<br>
+La media teórica de los cambios en el precio sería entonces $E[\ln{S_{T}}] = 4.8227$ y la desviación estándar $\sqrt{V[\ln{S_{T}}]} = 0.3163$. De esta forma, el valor esperado del precio en 9 meses, teóricamente sería el siguiente:
+$$E[S_{T}] =e^{E[\ln{S_{T}}]} = e^{4.8227} = 124.30$$
+
+<br>
+Los límites del intervalo de confianza serían los siguientes (el valor z debe ser de aproximadamente -1.96):
+$$e^{E[\ln{dS}] - |-1.96| \cdot \sqrt{V[\ln{dS}]}} \leq S_{T} \leq e^{E[\ln{dS}] + |-1.96| \cdot \sqrt{V[\ln{dS}]}}$$
+$$e^{4.8227 - |-1.96| \cdot 0.3163} \leq S_{T} \leq 4.8227 + |-1.96| \cdot 0.3163$$
+$$66.87 \leq S_{T} \leq 231.05$$
+<br>
+Lo que quiere decir que el precio de PINFRA.MX en 9 meses estaría entre 66.87 y 231.05 pesos.
+<br>
+<br>
+</div>
+
+#### Simulación con R
+<div style="text-align: justify; font-size: 16px">
+Los resultados de la simulación son los siguientes:
+El valor esperado del activo de PINFRA.MX dentro de 9 meses es de 
+$$`r resultados9m[3]`$$.
+
+Con un 95%, el precio de PINFRA.MX dentro de 9 meses estará en el intervalo
+$$`r resultados9m[1]` \leq S_{T} \leq `r resultados9m[2]`$$
+
+<br>
+</div>
+
+#### Comparación de resultados
+<div style="text-align: justify; font-size: 16px">
+A continuación se presenta un resumen de los resultados teóricos y simulados así como el error relativo:
+```{r Tabla 9 meses, echo = FALSE, warning = FALSE}
+results <- tibble(Resultado = c("Teórico", "Simulado", "Error relativo %"), Valor_E = c(124.30, resultados9m[3], `%`((resultados9m[3] - 124.30) / 124.30)), Liminf = c(66.87, resultados9m[1], `%`((resultados9m[1] - 66.87) / 66.87)), Limsup = c(231.05, resultados9m[2], `%`((resultados9m[2] - 231.05) / 231.05)))
+kable(results, align = c("c", "c", "c", "c"), digits = 2, col.names = c("Resultado", "Valor Esperado", "Lím. Inf. 95%", "Lím. Sup. 95%")) %>%
+  kable_paper(full_width = F, html_font = "Arial") %>%
+  row_spec(0, bold = T, color = "black") %>%
+  column_spec(1, bold = T, color = "black")
+```
+</div>
+
+<div style="text-align: center; font-size: 13px">
+**Tabla 11**. Comparación de resultados teóricos y simulados (en pesos mexicanos) a 9 meses. Elaboración propia.
+<br>
+<br>
+</div>
+
+### Pronóstico a 12 meses
+#### Cálculo teórico
+<div style="text-align: justify; font-size: 16px">
+A continuación se realiza el cálculo teórico del pronóstico.
+
+<br>
+En este caso, sustituyendo $dt = \frac{12}{12} = 1$ se obtiene que:
+$$\ln{S_{T}} = \ln{163.65} + (-0.3 - \frac{0.3652^{2}}{2})dt + 0.3652 \cdot \epsilon \sqrt{dt}$$
+$$\ln{S_{T}}= \ln{163.65} + (-0.3 - \frac{0.3652^{2}}{2}) \cdot 1 + 0.3652 \epsilon \sqrt{1} = 4.7310 + 0.3652 \epsilon$$ 
+
+<br>
+La media teórica de los cambios en el precio sería entonces $E[\ln{S_{T}}] = 4.7310$ y la desviación estándar $\sqrt{V[\ln{S_{T}}]} = 0.3652$. De esta forma, el valor esperado del precio en 12 meses, teóricamente sería el siguiente:
+$$E[S_{T}] = e^{E[\ln{S_{T}}]} = e^{4.7310} = 113.41$$
+
+<br>
+Los límites del intervalo de confianza serían los siguientes (el valor z debe ser de aproximadamente -1.96):
+$$e^{E[\ln{dS}] - |-1.96| \cdot \sqrt{V[\ln{dS}]}} \leq S_{T} \leq e^{E[\ln{dS}] + |-1.96| \cdot \sqrt{V[\ln{dS}]}}$$
+$$e^{4.7310 - |-1.96| \cdot 0.3652} \leq S_{T} \leq e^{4.7310 + |-1.96| \cdot 0.3652}$$
+$$55.43 \leq S_{T} \leq 232.01$$
+
+<br>
+Lo que quiere decir que el precio de PINFRA.MX en 12 meses estaría entre 55.43 y 232.01 pesos.
+<br>
+<br>
+</div>
+
+#### Simulación con R
+<div style="text-align: justify; font-size: 16px">
+Los resultados de la simulación son los siguientes:
+El valor esperado del activo de PINFRA.MX dentro de 12 meses es de 
+$$`r resultados12m[3]`$$.
+
+Con un 95%, el precio de PINFRA.MX dentro de 12 meses estará en el intervalo
+$$`r resultados12m[1]` \leq S_{T} \leq `r resultados12m[2]`$$
+
+<br>
+</div>
+
+#### Comparación de resultados
+<div style="text-align: justify; font-size: 16px">
+A continuación se presenta un resumen de los resultados teóricos y simulados así como el error relativo:
+```{r Tabla 12 meses, echo = FALSE, warning = FALSE}
+results <- tibble(Resultado = c("Teórico", "Simulado", "Error relativo %"), Valor_E = c(113.41, resultados12m[3], `%`((resultados12m[3] - 113.41) / 113.41)), Liminf = c(55.43, resultados12m[1], `%`((resultados12m[1] - 55.43) / 55.43)), Limsup = c(232.01, resultados12m[2], `%`((resultados12m[2] - 232.01) / 232.01)))
+kable(results, align = c("c", "c", "c", "c"), digits = 2, col.names = c("Resultado", "Valor Esperado", "Lím. Inf. 95%", "Lím. Sup. 95%")) %>%
+  kable_paper(full_width = F, html_font = "Arial") %>%
+  row_spec(0, bold = T, color = "black") %>%
+  column_spec(1, bold = T, color = "black")
+```
+</div>
+
+<div style="text-align: center; font-size: 13px">
+**Tabla 12**. Comparación de resultados teóricos y simulados (en pesos mexicanos) a 12 meses. Elaboración propia.
+<br>
+<br>
+</div>
+
+# Conclusiones
+<div style="text-align: justify; font-size: 16px">
+De manera general se concluye que la teoría sobre el análisis de activos financieros (en este caso de las acciones de PINFRA.MX), es limitada, pues como se puede observar en el desarrollo de este trabajo, no se cumple la normalidad del comportamiento de los rendimientos según la prueba Jarque-Bera. Además, tampoco se cumple la prueba de rendimiento cero, que postula que la media de los rendimientos suele ser cercana a cero. Otra limitante de estos modelos es que los hechos estilizados afirman que la volatilidad de los activos es no constante, pero se asume que lo es.
+
+<br>
+En cuanto a la simulación de precios: para las estimaciones a corto plazo (en días) tanto la simulación como el cálculo teórico son muy similares; sin embargo, para las estimaciones a mediano plazo (en meses) las estimaciones difieren de manera considerable, lo cual se puede apreciar en los errores relativos. Al mismo tiempo, es notable que conforme aumenta el periodo de estimación (dt) el intervalo de confianza al 95% también se hace más amplio por lo que no se podría dar una estimación o recomendación certera  sobre el precio a un plazo mayor a un mes. Adicionalmente, es importante mencionar que como el modelo utilizado para realizar estos pronósticos es estático, las estimaciones pueden variar conforme avanza el tiempo y se debe realizar el pronóstico nuevamente.
+
+<br>
+De acuerdo a las estimaciones, a corto plazo (hasta 40 días) la tendencia de PINFRA.MX será bajista, pero a mediano plazo ocurre algo muy interesante, porque el modelo teórico pronostica que el precio seguirá bajando y sin embargo las simulaciones muestran una leve recuperación. De hecho, los resultados teóricos y simulados difieren cada vez más conforme se alarga el periodo de estimación.
+<br>
+</div>
